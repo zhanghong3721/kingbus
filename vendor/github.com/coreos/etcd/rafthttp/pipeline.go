@@ -27,7 +27,6 @@ import (
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
-	. "github.com/flike/kingbus/log"
 )
 
 const (
@@ -65,13 +64,13 @@ func (p *pipeline) start() {
 	for i := 0; i < connPerPipeline; i++ {
 		go p.handle()
 	}
-	Log.Infof("started HTTP pipelining with peer %s", p.peerID)
+	plog.Infof("started HTTP pipelining with peer %s", p.peerID)
 }
 
 func (p *pipeline) stop() {
 	close(p.stopc)
 	p.wg.Wait()
-	Log.Infof("stopped HTTP pipelining with peer %s", p.peerID)
+	plog.Infof("stopped HTTP pipelining with peer %s", p.peerID)
 }
 
 func (p *pipeline) handle() {

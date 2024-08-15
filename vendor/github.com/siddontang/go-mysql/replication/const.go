@@ -41,47 +41,42 @@ const (
 type EventType byte
 
 const (
-	UNKNOWN_EVENT            EventType = iota //0
-	START_EVENT_V3                            //1
-	QUERY_EVENT                               //2
-	STOP_EVENT                                //3
-	ROTATE_EVENT                              //4
-	INTVAR_EVENT                              //5
-	LOAD_EVENT                                //6
-	SLAVE_EVENT                               //7
-	CREATE_FILE_EVENT                         //8
-	APPEND_BLOCK_EVENT                        //9
-	EXEC_LOAD_EVENT                           //10
-	DELETE_FILE_EVENT                         //11
-	NEW_LOAD_EVENT                            //12
-	RAND_EVENT                                //13
-	USER_VAR_EVENT                            //14
-	FORMAT_DESCRIPTION_EVENT                  //15
-	XID_EVENT                                 //16
-	BEGIN_LOAD_QUERY_EVENT                    //17
-	EXECUTE_LOAD_QUERY_EVENT                  //18
-	TABLE_MAP_EVENT                           //19
-	WRITE_ROWS_EVENTv0                        //20
-	UPDATE_ROWS_EVENTv0                       //21
-	DELETE_ROWS_EVENTv0                       //22
-	WRITE_ROWS_EVENTv1                        //23
-	UPDATE_ROWS_EVENTv1                       //24
-	DELETE_ROWS_EVENTv1                       //25
-	INCIDENT_EVENT                            //26
-	HEARTBEAT_EVENT                           //27
-	IGNORABLE_EVENT                           //28
-	ROWS_QUERY_EVENT                          //29
-	WRITE_ROWS_EVENTv2                        //30
-	UPDATE_ROWS_EVENTv2                       //31
-	DELETE_ROWS_EVENTv2                       //32
-	GTID_EVENT                                //33
-	ANONYMOUS_GTID_EVENT                      //34
-	PREVIOUS_GTIDS_EVENT                      //35
-
-	//add by kingbus
-	TRANSACTION_CONTEXT_EVENT //36
-	VIEW_CHANGE_EVENT         //37
-	XA_PREPARE_LOG_EVENT      //38
+	UNKNOWN_EVENT EventType = iota
+	START_EVENT_V3
+	QUERY_EVENT
+	STOP_EVENT
+	ROTATE_EVENT
+	INTVAR_EVENT
+	LOAD_EVENT
+	SLAVE_EVENT
+	CREATE_FILE_EVENT
+	APPEND_BLOCK_EVENT
+	EXEC_LOAD_EVENT
+	DELETE_FILE_EVENT
+	NEW_LOAD_EVENT
+	RAND_EVENT
+	USER_VAR_EVENT
+	FORMAT_DESCRIPTION_EVENT
+	XID_EVENT
+	BEGIN_LOAD_QUERY_EVENT
+	EXECUTE_LOAD_QUERY_EVENT
+	TABLE_MAP_EVENT
+	WRITE_ROWS_EVENTv0
+	UPDATE_ROWS_EVENTv0
+	DELETE_ROWS_EVENTv0
+	WRITE_ROWS_EVENTv1
+	UPDATE_ROWS_EVENTv1
+	DELETE_ROWS_EVENTv1
+	INCIDENT_EVENT
+	HEARTBEAT_EVENT
+	IGNORABLE_EVENT
+	ROWS_QUERY_EVENT
+	WRITE_ROWS_EVENTv2
+	UPDATE_ROWS_EVENTv2
+	DELETE_ROWS_EVENTv2
+	GTID_EVENT
+	ANONYMOUS_GTID_EVENT
+	PREVIOUS_GTIDS_EVENT
 )
 
 const (
@@ -174,12 +169,6 @@ func (e EventType) String() string {
 		return "MariadbGTIDEvent"
 	case MARIADB_GTID_LIST_EVENT:
 		return "MariadbGTIDListEvent"
-	case TRANSACTION_CONTEXT_EVENT:
-		return "TRANSACTION_CONTEXT_EVENT"
-	case VIEW_CHANGE_EVENT:
-		return "VIEW_CHANGE_EVENT"
-	case XA_PREPARE_LOG_EVENT:
-		return "XA_PREPARE_LOG_EVENT"
 
 	default:
 		return "UnknownEvent"

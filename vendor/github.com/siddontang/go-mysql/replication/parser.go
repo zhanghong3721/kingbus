@@ -212,16 +212,13 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 		p.format = &FormatDescriptionEvent{}
 		e = p.format
 	} else {
-		//by kingbus,kingbus also open crc32
-		if p.format != nil && p.format.ChecksumAlgorithm != BINLOG_CHECKSUM_ALG_CRC32 {
-			panic(fmt.Sprintf("fde not open crc32,fde:%v", *(p.format)))
+		if p.format != nil && p.format.ChecksumAlgorithm == BINLOG_CHECKSUM_ALG_CRC32 {
+			err := p.verifyCrc32Checksum(rawData)
+			if err != nil {
+				return nil, err
+			}
+			data = data[0 : len(data)-BinlogChecksumLength]
 		}
-
-		err := p.verifyCrc32Checksum(rawData)
-		if err != nil {
-			return nil, err
-		}
-		data = data[0 : len(data)-BinlogChecksumLength]
 
 		if h.EventType == ROTATE_EVENT {
 			e = &RotateEvent{}
@@ -267,8 +264,6 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				ee := &MariadbGTIDEvent{}
 				ee.GTID.ServerID = h.ServerID
 				e = ee
-			case PREVIOUS_GTIDS_EVENT: //by kingbus
-				e = &PreviousGtidsLogEvent{}
 			default:
 				e = &GenericEvent{}
 			}

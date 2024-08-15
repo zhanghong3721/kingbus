@@ -32,11 +32,8 @@ import (
 	"time"
 
 	"github.com/coreos/etcd/pkg/tlsutil"
-
-	"go.uber.org/zap"
 )
 
-// NewListener creates a new listner.
 func NewListener(addr, scheme string, tlsinfo *TLSInfo) (l net.Listener, err error) {
 	if l, err = newListener(addr, scheme); err != nil {
 		return nil, err
@@ -62,6 +59,7 @@ func wrapTLS(addr, scheme string, tlsinfo *TLSInfo, l net.Listener) (net.Listene
 type TLSInfo struct {
 	CertFile           string
 	KeyFile            string
+	CAFile             string // TODO: deprecate this in v4
 	TrustedCAFile      string
 	ClientCertAuth     bool
 	CRLFile            string
@@ -74,6 +72,11 @@ type TLSInfo struct {
 	// connection will be closed immediately afterwards.
 	HandshakeFailure func(*tls.Conn, error)
 
+	// CipherSuites is a list of supported cipher suites.
+	// If empty, Go auto-populates it by default.
+	// Note that cipher suites are prioritized in the given order.
+	CipherSuites []uint16
+
 	selfCert bool
 
 	// parseFunc exists to simplify testing. Typically, parseFunc
@@ -82,25 +85,20 @@ type TLSInfo struct {
 
 	// AllowedCN is a CN which must be provided by a client.
 	AllowedCN string
-
-	// Logger logs TLS errors.
-	// If nil, all logs are discarded.
-	Logger *zap.Logger
 }
 
 func (info TLSInfo) String() string {
-	return fmt.Sprintf("cert = %s, key = %s, trusted-ca = %s, client-cert-auth = %v, crl-file = %s", info.CertFile, info.KeyFile, info.TrustedCAFile, info.ClientCertAuth, info.CRLFile)
+	return fmt.Sprintf("cert = %s, key = %s, ca = %s, trusted-ca = %s, client-cert-auth = %v, crl-file = %s", info.CertFile, info.KeyFile, info.CAFile, info.TrustedCAFile, info.ClientCertAuth, info.CRLFile)
 }
 
 func (info TLSInfo) Empty() bool {
 	return info.CertFile == "" && info.KeyFile == ""
 }
 
-func SelfCert(lg *zap.Logger, dirpath string, hosts []string) (info TLSInfo, err error) {
+func SelfCert(dirpath string, hosts []string) (info TLSInfo, err error) {
 	if err = os.MkdirAll(dirpath, 0700); err != nil {
 		return
 	}
-	info.Logger = lg
 
 	certPath := filepath.Join(dirpath, "cert.pem")
 	keyPath := filepath.Join(dirpath, "key.pem")
@@ -116,10 +114,6 @@ func SelfCert(lg *zap.Logger, dirpath string, hosts []string) (info TLSInfo, err
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		info.Logger.Warn(
-			"cannot generate random number",
-			zap.Error(err),
-		)
 		return
 	}
 
@@ -145,34 +139,20 @@ func SelfCert(lg *zap.Logger, dirpath string, hosts []string) (info TLSInfo, err
 
 	priv, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	if err != nil {
-		info.Logger.Warn(
-			"cannot generate ECDSA key",
-			zap.Error(err),
-		)
 		return
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
 	if err != nil {
-		info.Logger.Warn(
-			"cannot generate x509 certificate",
-			zap.Error(err),
-		)
 		return
 	}
 
 	certOut, err := os.Create(certPath)
 	if err != nil {
-		info.Logger.Warn(
-			"cannot cert file",
-			zap.String("path", certPath),
-			zap.Error(err),
-		)
 		return
 	}
 	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 	certOut.Close()
-	info.Logger.Debug("created cert file", zap.String("path", certPath))
 
 	b, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
@@ -180,37 +160,31 @@ func SelfCert(lg *zap.Logger, dirpath string, hosts []string) (info TLSInfo, err
 	}
 	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		info.Logger.Warn(
-			"cannot key file",
-			zap.String("path", keyPath),
-			zap.Error(err),
-		)
 		return
 	}
 	pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: b})
 	keyOut.Close()
-	info.Logger.Debug("created key file", zap.String("path", keyPath))
 
-	return SelfCert(lg, dirpath, hosts)
+	return SelfCert(dirpath, hosts)
 }
 
 func (info TLSInfo) baseConfig() (*tls.Config, error) {
 	if info.KeyFile == "" || info.CertFile == "" {
 		return nil, fmt.Errorf("KeyFile and CertFile must both be present[key: %v, cert: %v]", info.KeyFile, info.CertFile)
 	}
-	if info.Logger == nil {
-		info.Logger = zap.NewNop()
-	}
 
-	tlsCert, err := tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
+	_, err := tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
 	if err != nil {
 		return nil, err
 	}
 
 	cfg := &tls.Config{
-		Certificates: []tls.Certificate{*tlsCert},
-		MinVersion:   tls.VersionTLS12,
-		ServerName:   info.ServerName,
+		MinVersion: tls.VersionTLS12,
+		ServerName: info.ServerName,
+	}
+
+	if len(info.CipherSuites) > 0 {
+		cfg.CipherSuites = info.CipherSuites
 	}
 
 	if info.AllowedCN != "" {
@@ -228,43 +202,11 @@ func (info TLSInfo) baseConfig() (*tls.Config, error) {
 
 	// this only reloads certs when there's a client request
 	// TODO: support server-side refresh (e.g. inotify, SIGHUP), caching
-	cfg.GetCertificate = func(clientHello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
-		cert, err = tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
-		if os.IsNotExist(err) {
-			info.Logger.Warn(
-				"failed to find peer cert files",
-				zap.String("cert-file", info.CertFile),
-				zap.String("key-file", info.KeyFile),
-				zap.Error(err),
-			)
-		} else if err != nil {
-			info.Logger.Warn(
-				"failed to create peer certificate",
-				zap.String("cert-file", info.CertFile),
-				zap.String("key-file", info.KeyFile),
-				zap.Error(err),
-			)
-		}
-		return cert, err
+	cfg.GetCertificate = func(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
 	}
-	cfg.GetClientCertificate = func(unused *tls.CertificateRequestInfo) (cert *tls.Certificate, err error) {
-		cert, err = tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
-		if os.IsNotExist(err) {
-			info.Logger.Warn(
-				"failed to find client cert files",
-				zap.String("cert-file", info.CertFile),
-				zap.String("key-file", info.KeyFile),
-				zap.Error(err),
-			)
-		} else if err != nil {
-			info.Logger.Warn(
-				"failed to create client certificate",
-				zap.String("cert-file", info.CertFile),
-				zap.String("key-file", info.KeyFile),
-				zap.Error(err),
-			)
-		}
-		return cert, err
+	cfg.GetClientCertificate = func(unused *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		return tlsutil.NewCert(info.CertFile, info.KeyFile, info.parseFunc)
 	}
 	return cfg, nil
 }
@@ -272,6 +214,9 @@ func (info TLSInfo) baseConfig() (*tls.Config, error) {
 // cafiles returns a list of CA file paths.
 func (info TLSInfo) cafiles() []string {
 	cs := make([]string, 0)
+	if info.CAFile != "" {
+		cs = append(cs, info.CAFile)
+	}
 	if info.TrustedCAFile != "" {
 		cs = append(cs, info.TrustedCAFile)
 	}
@@ -286,13 +231,13 @@ func (info TLSInfo) ServerConfig() (*tls.Config, error) {
 	}
 
 	cfg.ClientAuth = tls.NoClientCert
-	if info.TrustedCAFile != "" || info.ClientCertAuth {
+	if info.CAFile != "" || info.ClientCertAuth {
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 
-	cs := info.cafiles()
-	if len(cs) > 0 {
-		cp, err := tlsutil.NewCertPool(cs)
+	CAFiles := info.cafiles()
+	if len(CAFiles) > 0 {
+		cp, err := tlsutil.NewCertPool(CAFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -320,9 +265,9 @@ func (info TLSInfo) ClientConfig() (*tls.Config, error) {
 	}
 	cfg.InsecureSkipVerify = info.InsecureSkipVerify
 
-	cs := info.cafiles()
-	if len(cs) > 0 {
-		cfg.RootCAs, err = tlsutil.NewCertPool(cs)
+	CAFiles := info.cafiles()
+	if len(CAFiles) > 0 {
+		cfg.RootCAs, err = tlsutil.NewCertPool(CAFiles)
 		if err != nil {
 			return nil, err
 		}

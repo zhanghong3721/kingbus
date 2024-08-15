@@ -26,9 +26,7 @@ import (
 	"github.com/coreos/etcd/pkg/transport"
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/version"
-
 	"github.com/coreos/go-semver/semver"
-	. "github.com/flike/kingbus/log"
 )
 
 var (
@@ -66,7 +64,7 @@ func createPostRequest(u url.URL, path string, body io.Reader, ct string, urls t
 	uu.Path = path
 	req, err := http.NewRequest("POST", uu.String(), body)
 	if err != nil {
-		Log.Panicf("unexpected new request error (%v)", err)
+		plog.Panicf("unexpected new request error (%v)", err)
 	}
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set("X-Server-From", from.String())
@@ -85,10 +83,10 @@ func checkPostResponse(resp *http.Response, body []byte, req *http.Request, to t
 	case http.StatusPreconditionFailed:
 		switch strings.TrimSuffix(string(body), "\n") {
 		case errIncompatibleVersion.Error():
-			Log.Errorf("request sent was ignored by peer %s (server version incompatible)", to)
+			plog.Errorf("request sent was ignored by peer %s (server version incompatible)", to)
 			return errIncompatibleVersion
 		case errClusterIDMismatch.Error():
-			Log.Errorf("request sent was ignored (cluster ID mismatch: remote[%s]=%s, local=%s)",
+			plog.Errorf("request sent was ignored (cluster ID mismatch: remote[%s]=%s, local=%s)",
 				to, resp.Header.Get("X-Etcd-Cluster-ID"), req.Header.Get("X-Etcd-Cluster-ID"))
 			return errClusterIDMismatch
 		default:

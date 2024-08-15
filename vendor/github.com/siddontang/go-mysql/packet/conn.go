@@ -79,12 +79,11 @@ func (c *Conn) ReadPacketTo(w io.Writer) error {
 	header := []byte{0, 0, 0, 0}
 
 	if _, err := io.ReadFull(c.br, header); err != nil {
-		return err
+		return ErrBadConn
 	}
 
 	length := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-
-	if length < 0 {
+	if length < 1 {
 		return errors.Errorf("invalid payload length %d", length)
 	}
 
@@ -95,14 +94,6 @@ func (c *Conn) ReadPacketTo(w io.Writer) error {
 	}
 
 	c.Sequence++
-	//by kingbus
-	//If the payload is larger than or equal to 2^24-1 bytes the length is set to 2^24-1 (oxff ff ff)
-	// and a additional packets are sent with the rest of the payload
-	// until the payload of a packet is less than 2^24-1 bytes
-	//https://dev.mysql.com/doc/internals/en/sending-more-than-16mbyte.html
-	if length == 0 {
-		return nil
-	}
 
 	if n, err := io.CopyN(w, c.br, int64(length)); err != nil {
 		return ErrBadConn

@@ -3,8 +3,8 @@ package replication
 import (
 	"context"
 
-	. "github.com/flike/kingbus/log"
 	"github.com/juju/errors"
+	"github.com/siddontang/go-log/log"
 )
 
 var (
@@ -54,7 +54,7 @@ func (s *BinlogStreamer) closeWithError(err error) {
 	if err == nil {
 		err = ErrSyncClosed
 	}
-	Log.Errorf("close sync with err: %v", err)
+	log.Errorf("close sync with err: %v", err)
 	select {
 	case s.ech <- err:
 	default:
