@@ -23,9 +23,8 @@ import (
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/raftsnap"
+	"github.com/coreos/etcd/snap"
 
-	. "github.com/flike/kingbus/log"
 	"golang.org/x/time/rate"
 )
 
@@ -64,7 +63,7 @@ type Peer interface {
 
 	// sendSnap sends the merged snapshot message to the remote peer. Its behavior
 	// is similar to send.
-	sendSnap(m raftsnap.Message)
+	sendSnap(m snap.Message)
 
 	// update updates the urls of remote peer.
 	update(urls types.URLs)
@@ -120,8 +119,8 @@ type peer struct {
 }
 
 func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats.FollowerStats) *peer {
-	Log.Infof("starting peer %s...", peerID)
-	defer Log.Infof("started peer %s", peerID)
+	plog.Infof("starting peer %s...", peerID)
+	defer plog.Infof("started peer %s", peerID)
 
 	status := newPeerStatus(peerID)
 	picker := newURLPicker(urls)
@@ -159,7 +158,7 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 			select {
 			case mm := <-p.recvc:
 				if err := r.Process(ctx, mm); err != nil {
-					Log.Warningf("failed to process raft message (%v)", err)
+					plog.Warningf("failed to process raft message (%v)", err)
 				}
 			case <-p.stopc:
 				return
@@ -175,7 +174,7 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 			select {
 			case mm := <-p.propc:
 				if err := r.Process(ctx, mm); err != nil {
-					Log.Warningf("failed to process raft message (%v)", err)
+					plog.Warningf("failed to process raft message (%v)", err)
 				}
 			case <-p.stopc:
 				return
@@ -228,14 +227,14 @@ func (p *peer) send(m raftpb.Message) {
 			p.r.ReportSnapshot(m.To, raft.SnapshotFailure)
 		}
 		if p.status.isActive() {
-			Log.Warningf("dropped internal raft message to %s since %s's sending buffer is full (bad/overloaded network)", p.id, name)
+			plog.MergeWarningf("dropped internal raft message to %s since %s's sending buffer is full (bad/overloaded network)", p.id, name)
 		}
-		Log.Debugf("dropped %s to %s since %s's sending buffer is full", m.Type, p.id, name)
+		plog.Debugf("dropped %s to %s since %s's sending buffer is full", m.Type, p.id, name)
 		sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
 	}
 }
 
-func (p *peer) sendSnap(m raftsnap.Message) {
+func (p *peer) sendSnap(m snap.Message) {
 	go p.snapSender.send(m)
 }
 
@@ -251,7 +250,7 @@ func (p *peer) attachOutgoingConn(conn *outgoingConn) {
 	case streamTypeMessage:
 		ok = p.writer.attach(conn)
 	default:
-		Log.Panicf("unhandled stream type %s", conn.t)
+		plog.Panicf("unhandled stream type %s", conn.t)
 	}
 	if !ok {
 		conn.Close()
@@ -280,8 +279,8 @@ func (p *peer) Resume() {
 }
 
 func (p *peer) stop() {
-	Log.Infof("stopping peer %s...", p.id)
-	defer Log.Infof("stopped peer %s", p.id)
+	plog.Infof("stopping peer %s...", p.id)
+	defer plog.Infof("stopped peer %s", p.id)
 
 	close(p.stopc)
 	p.cancel()

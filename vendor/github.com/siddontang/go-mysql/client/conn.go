@@ -173,19 +173,6 @@ func (c *Conn) SetCharset(charset string) error {
 	}
 }
 
-//add by kingbus
-//set slave_uuid, so the master will kill dump thread which uuid is same with slave_uuid
-func (c *Conn) SetSlaveUuid(slaveUuid string) error {
-	if len(slaveUuid) == 0 {
-		return fmt.Errorf("slaveUuid is nil")
-	}
-	_, err := c.exec(fmt.Sprintf("SET @slave_uuid='%s'", slaveUuid))
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return nil
-}
-
 func (c *Conn) FieldList(table string, wildcard string) ([]*Field, error) {
 	if err := c.writeCommandStrStr(COM_FIELD_LIST, table, wildcard); err != nil {
 		return nil, errors.Trace(err)

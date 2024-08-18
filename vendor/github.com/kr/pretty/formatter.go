@@ -8,14 +8,11 @@ import (
 	"text/tabwriter"
 
 	"github.com/kr/text"
-)
-
-const (
-	limit = 50
+	"github.com/rogpeppe/go-internal/fmtsort"
 )
 
 type formatter struct {
-	x     interface{}
+	v     reflect.Value
 	force bool
 	quote bool
 }
@@ -30,18 +27,18 @@ type formatter struct {
 // format x according to the usual rules of package fmt.
 // In particular, if x satisfies fmt.Formatter, then x.Format will be called.
 func Formatter(x interface{}) (f fmt.Formatter) {
-	return formatter{x: x, quote: true}
+	return formatter{v: reflect.ValueOf(x), quote: true}
 }
 
 func (fo formatter) String() string {
-	return fmt.Sprint(fo.x) // unwrap it
+	return fmt.Sprint(fo.v.Interface()) // unwrap it
 }
 
 func (fo formatter) passThrough(f fmt.State, c rune) {
 	s := "%"
 	for i := 0; i < 128; i++ {
 		if f.Flag(i) {
-			s += string(i)
+			s += string(rune(i))
 		}
 	}
 	if w, ok := f.Width(); ok {
@@ -51,14 +48,14 @@ func (fo formatter) passThrough(f fmt.State, c rune) {
 		s += fmt.Sprintf(".%d", p)
 	}
 	s += string(c)
-	fmt.Fprintf(f, s, fo.x)
+	fmt.Fprintf(f, s, fo.v.Interface())
 }
 
 func (fo formatter) Format(f fmt.State, c rune) {
 	if fo.force || c == 'v' && f.Flag('#') && f.Flag(' ') {
 		w := tabwriter.NewWriter(f, 4, 4, 1, ' ', 0)
 		p := &printer{tw: w, Writer: w, visited: make(map[visit]int)}
-		p.printValue(reflect.ValueOf(fo.x), true, fo.quote)
+		p.printValue(fo.v, true, fo.quote)
 		w.Flush()
 		return
 	}
@@ -95,10 +92,37 @@ type visit struct {
 	typ reflect.Type
 }
 
+func (p *printer) catchPanic(v reflect.Value, method string) {
+	if r := recover(); r != nil {
+		if v.Kind() == reflect.Ptr && v.IsNil() {
+			writeByte(p, '(')
+			io.WriteString(p, v.Type().String())
+			io.WriteString(p, ")(nil)")
+			return
+		}
+		writeByte(p, '(')
+		io.WriteString(p, v.Type().String())
+		io.WriteString(p, ")(PANIC=calling method ")
+		io.WriteString(p, strconv.Quote(method))
+		io.WriteString(p, ": ")
+		fmt.Fprint(p, r)
+		writeByte(p, ')')
+	}
+}
+
 func (p *printer) printValue(v reflect.Value, showType, quote bool) {
 	if p.depth > 10 {
 		io.WriteString(p, "!%v(DEPTH EXCEEDED)")
 		return
+	}
+
+	if v.IsValid() && v.CanInterface() {
+		i := v.Interface()
+		if goStringer, ok := i.(fmt.GoStringer); ok {
+			defer p.catchPanic(v, "GoString")
+			io.WriteString(p, goStringer.GoString())
+			return
+		}
 	}
 
 	switch v.Kind() {
@@ -127,17 +151,16 @@ func (p *printer) printValue(v reflect.Value, showType, quote bool) {
 				writeByte(p, '\n')
 				pp = p.indent()
 			}
-			keys := v.MapKeys()
+			sm := fmtsort.Sort(v)
 			for i := 0; i < v.Len(); i++ {
-				showTypeInStruct := true
-				k := keys[i]
-				mv := v.MapIndex(k)
+				k := sm.Key[i]
+				mv := sm.Value[i]
 				pp.printValue(k, false, true)
 				writeByte(pp, ':')
 				if expand {
 					writeByte(pp, '\t')
 				}
-				showTypeInStruct = t.Elem().Kind() == reflect.Interface
+				showTypeInStruct := t.Elem().Kind() == reflect.Interface
 				pp.printValue(mv, showTypeInStruct, true)
 				if expand {
 					io.WriteString(pp, ",\n")
@@ -317,11 +340,6 @@ func (p *printer) fmtString(s string, quote bool) {
 		s = strconv.Quote(s)
 	}
 	io.WriteString(p, s)
-}
-
-func tryDeepEqual(a, b interface{}) bool {
-	defer func() { recover() }()
-	return reflect.DeepEqual(a, b)
 }
 
 func writeByte(w io.Writer, b byte) {

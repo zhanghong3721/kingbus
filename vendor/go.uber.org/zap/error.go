@@ -21,17 +21,16 @@
 package zap
 
 import (
-	"sync"
-
+	"go.uber.org/zap/internal/pool"
 	"go.uber.org/zap/zapcore"
 )
 
-var _errArrayElemPool = sync.Pool{New: func() interface{} {
+var _errArrayElemPool = pool.New(func() *errArrayElem {
 	return &errArrayElem{}
-}}
+})
 
 // Error is shorthand for the common idiom NamedError("error", err).
-func Error(err error) zapcore.Field {
+func Error(err error) Field {
 	return NamedError("error", err)
 }
 
@@ -42,11 +41,11 @@ func Error(err error) zapcore.Field {
 //
 // For the common case in which the key is simply "error", the Error function
 // is shorter and less repetitive.
-func NamedError(key string, err error) zapcore.Field {
+func NamedError(key string, err error) Field {
 	if err == nil {
 		return Skip()
 	}
-	return zapcore.Field{Key: key, Type: zapcore.ErrorType, Interface: err}
+	return Field{Key: key, Type: zapcore.ErrorType, Interface: err}
 }
 
 type errArray []error
@@ -60,11 +59,14 @@ func (errs errArray) MarshalLogArray(arr zapcore.ArrayEncoder) error {
 		// potentially an "errorVerbose" attribute, we need to wrap it in a
 		// type that implements LogObjectMarshaler. To prevent this from
 		// allocating, pool the wrapper type.
-		elem := _errArrayElemPool.Get().(*errArrayElem)
+		elem := _errArrayElemPool.Get()
 		elem.error = errs[i]
-		arr.AppendObject(elem)
+		err := arr.AppendObject(elem)
 		elem.error = nil
 		_errArrayElemPool.Put(elem)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

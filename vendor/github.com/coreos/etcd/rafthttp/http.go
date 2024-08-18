@@ -22,13 +22,13 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	pioutil "github.com/coreos/etcd/pkg/ioutil"
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/raftsnap"
+	"github.com/coreos/etcd/snap"
 	"github.com/coreos/etcd/version"
-	. "github.com/flike/kingbus/log"
 )
 
 const (
@@ -99,7 +99,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
 	b, err := ioutil.ReadAll(limitedr)
 	if err != nil {
-		Log.Errorf("failed to read raft message (%v)", err)
+		plog.Errorf("failed to read raft message (%v)", err)
 		http.Error(w, "error reading raft message", http.StatusBadRequest)
 		recvFailures.WithLabelValues(r.RemoteAddr).Inc()
 		return
@@ -107,7 +107,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var m raftpb.Message
 	if err := m.Unmarshal(b); err != nil {
-		Log.Errorf("failed to unmarshal raft message (%v)", err)
+		plog.Errorf("failed to unmarshal raft message (%v)", err)
 		http.Error(w, "error unmarshaling raft message", http.StatusBadRequest)
 		recvFailures.WithLabelValues(r.RemoteAddr).Inc()
 		return
@@ -120,7 +120,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case writerToResponse:
 			v.WriteTo(w)
 		default:
-			Log.Warningf("failed to process raft message (%v)", err)
+			plog.Warningf("failed to process raft message (%v)", err)
 			http.Error(w, "error processing raft message", http.StatusInternalServerError)
 			w.(http.Flusher).Flush()
 			// disconnect the http stream
@@ -137,11 +137,11 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type snapshotHandler struct {
 	tr          Transporter
 	r           Raft
-	snapshotter *raftsnap.Snapshotter
+	snapshotter *snap.Snapshotter
 	cid         types.ID
 }
 
-func newSnapshotHandler(tr Transporter, r Raft, snapshotter *raftsnap.Snapshotter, cid types.ID) http.Handler {
+func newSnapshotHandler(tr Transporter, r Raft, snapshotter *snap.Snapshotter, cid types.ID) http.Handler {
 	return &snapshotHandler{
 		tr:          tr,
 		r:           r,
@@ -149,6 +149,8 @@ func newSnapshotHandler(tr Transporter, r Raft, snapshotter *raftsnap.Snapshotte
 		cid:         cid,
 	}
 }
+
+const unknownSnapshotSender = "UNKNOWN_SNAPSHOT_SENDER"
 
 // ServeHTTP serves HTTP request to receive and process snapshot message.
 //
@@ -160,9 +162,12 @@ func newSnapshotHandler(tr Transporter, r Raft, snapshotter *raftsnap.Snapshotte
 // received and processed.
 // 2. this case should happen rarely, so no further optimization is done.
 func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		snapshotReceiveFailures.WithLabelValues(unknownSnapshotSender).Inc()
 		return
 	}
 
@@ -170,6 +175,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := checkClusterCompatibilityFromHeader(r.Header, h.cid); err != nil {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
+		snapshotReceiveFailures.WithLabelValues(unknownSnapshotSender).Inc()
 		return
 	}
 
@@ -178,33 +184,37 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dec := &messageDecoder{r: r.Body}
 	// let snapshots be very large since they can exceed 512MB for large installations
 	m, err := dec.decodeLimit(uint64(1 << 63))
+	from := types.ID(m.From).String()
 	if err != nil {
 		msg := fmt.Sprintf("failed to decode raft message (%v)", err)
-		Log.Errorf(msg)
+		plog.Errorf(msg)
 		http.Error(w, msg, http.StatusBadRequest)
 		recvFailures.WithLabelValues(r.RemoteAddr).Inc()
+		snapshotReceiveFailures.WithLabelValues(from).Inc()
 		return
 	}
 
-	receivedBytes.WithLabelValues(types.ID(m.From).String()).Add(float64(m.Size()))
+	receivedBytes.WithLabelValues(from).Add(float64(m.Size()))
 
 	if m.Type != raftpb.MsgSnap {
-		Log.Errorf("unexpected raft message type %s on snapshot path", m.Type)
+		plog.Errorf("unexpected raft message type %s on snapshot path", m.Type)
 		http.Error(w, "wrong raft message type", http.StatusBadRequest)
+		snapshotReceiveFailures.WithLabelValues(from).Inc()
 		return
 	}
 
-	Log.Infof("receiving database snapshot [index:%d, from %s] ...", m.Snapshot.Metadata.Index, types.ID(m.From))
+	plog.Infof("receiving database snapshot [index:%d, from %s] ...", m.Snapshot.Metadata.Index, types.ID(m.From))
 	// save incoming database snapshot.
 	n, err := h.snapshotter.SaveDBFrom(r.Body, m.Snapshot.Metadata.Index)
 	if err != nil {
 		msg := fmt.Sprintf("failed to save KV snapshot (%v)", err)
-		Log.Error(msg)
+		plog.Error(msg)
 		http.Error(w, msg, http.StatusInternalServerError)
+		snapshotReceiveFailures.WithLabelValues(from).Inc()
 		return
 	}
-	receivedBytes.WithLabelValues(types.ID(m.From).String()).Add(float64(n))
-	Log.Infof("received and saved database snapshot [index: %d, from: %s] successfully", m.Snapshot.Metadata.Index, types.ID(m.From))
+	receivedBytes.WithLabelValues(from).Add(float64(n))
+	plog.Infof("received and saved database snapshot [index: %d, from: %s] successfully", m.Snapshot.Metadata.Index, types.ID(m.From))
 
 	if err := h.r.Process(context.TODO(), m); err != nil {
 		switch v := err.(type) {
@@ -214,14 +224,18 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			v.WriteTo(w)
 		default:
 			msg := fmt.Sprintf("failed to process raft message (%v)", err)
-			Log.Warningf(msg)
+			plog.Warningf(msg)
 			http.Error(w, msg, http.StatusInternalServerError)
+			snapshotReceiveFailures.WithLabelValues(from).Inc()
 		}
 		return
 	}
 	// Write StatusNoContent header after the message has been processed by
 	// raft, which facilitates the client to report MsgSnap status.
 	w.WriteHeader(http.StatusNoContent)
+
+	snapshotReceive.WithLabelValues(from).Inc()
+	snapshotReceiveSeconds.WithLabelValues(from).Observe(time.Since(start).Seconds())
 }
 
 type streamHandler struct {
@@ -264,7 +278,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case streamTypeMessage.endpoint():
 		t = streamTypeMessage
 	default:
-		Log.Debugf("ignored unexpected streaming request path %s", r.URL.Path)
+		plog.Debugf("ignored unexpected streaming request path %s", r.URL.Path)
 		http.Error(w, "invalid path", http.StatusNotFound)
 		return
 	}
@@ -272,12 +286,12 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fromStr := path.Base(r.URL.Path)
 	from, err := types.IDFromString(fromStr)
 	if err != nil {
-		Log.Errorf("failed to parse from %s into ID (%v)", fromStr, err)
+		plog.Errorf("failed to parse from %s into ID (%v)", fromStr, err)
 		http.Error(w, "invalid from", http.StatusNotFound)
 		return
 	}
 	if h.r.IsIDRemoved(uint64(from)) {
-		Log.Warningf("rejected the stream from peer %s since it was removed", from)
+		plog.Warningf("rejected the stream from peer %s since it was removed", from)
 		http.Error(w, "removed member", http.StatusGone)
 		return
 	}
@@ -291,14 +305,14 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if urls := r.Header.Get("X-PeerURLs"); urls != "" {
 			h.tr.AddRemote(from, strings.Split(urls, ","))
 		}
-		Log.Errorf("failed to find member %s in cluster %s", from, h.cid)
+		plog.Errorf("failed to find member %s in cluster %s", from, h.cid)
 		http.Error(w, "error sender not found", http.StatusNotFound)
 		return
 	}
 
 	wto := h.id.String()
 	if gto := r.Header.Get("X-Raft-To"); gto != wto {
-		Log.Errorf("streaming request ignored (ID mismatch got %s want %s)", gto, wto)
+		plog.Errorf("streaming request ignored (ID mismatch got %s want %s)", gto, wto)
 		http.Error(w, "to field mismatch", http.StatusPreconditionFailed)
 		return
 	}
@@ -324,11 +338,11 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // matches the one in the header.
 func checkClusterCompatibilityFromHeader(header http.Header, cid types.ID) error {
 	if err := checkVersionCompability(header.Get("X-Server-From"), serverVersion(header), minClusterVersion(header)); err != nil {
-		Log.Errorf("request version incompatibility (%v)", err)
+		plog.Errorf("request version incompatibility (%v)", err)
 		return errIncompatibleVersion
 	}
 	if gcid := header.Get("X-Etcd-Cluster-ID"); gcid != cid.String() {
-		Log.Errorf("request cluster ID mismatch (got %s want %s)", gcid, cid)
+		plog.Errorf("request cluster ID mismatch (got %s want %s)", gcid, cid)
 		return errClusterIDMismatch
 	}
 	return nil

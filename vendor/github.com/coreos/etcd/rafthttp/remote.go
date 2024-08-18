@@ -17,7 +17,6 @@ package rafthttp
 import (
 	"github.com/coreos/etcd/pkg/types"
 	"github.com/coreos/etcd/raft/raftpb"
-	. "github.com/flike/kingbus/log"
 )
 
 type remote struct {
@@ -51,9 +50,9 @@ func (g *remote) send(m raftpb.Message) {
 	case g.pipeline.msgc <- m:
 	default:
 		if g.status.isActive() {
-			Log.Warningf("dropped internal raft message to %s since sending buffer is full (bad/overloaded network)", g.id)
+			plog.MergeWarningf("dropped internal raft message to %s since sending buffer is full (bad/overloaded network)", g.id)
 		}
-		Log.Debugf("dropped %s to %s since sending buffer is full", m.Type, g.id)
+		plog.Debugf("dropped %s to %s since sending buffer is full", m.Type, g.id)
 		sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
 	}
 }

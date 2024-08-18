@@ -199,27 +199,6 @@ func (e *FormatDescriptionEvent) Dump(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
-//by kingbus
-type PreviousGtidsLogEvent struct {
-	GSet *MysqlGTIDSet
-}
-
-func (e *PreviousGtidsLogEvent) Decode(data []byte) error {
-	var err error
-	e.GSet, err = DecodeMysqlGTIDSet(data)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (e *PreviousGtidsLogEvent) Dump(w io.Writer) {
-	if e.GSet != nil {
-		fmt.Fprintf(w, "PreviousGtids: %s\n", e.GSet.String())
-	}
-	fmt.Fprintln(w)
-}
-
 type RotateEvent struct {
 	Position    uint64
 	NextLogName []byte

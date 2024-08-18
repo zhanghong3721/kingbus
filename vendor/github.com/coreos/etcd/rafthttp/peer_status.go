@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/coreos/etcd/pkg/types"
-	. "github.com/flike/kingbus/log"
 )
 
 type failureType struct {
@@ -45,7 +44,7 @@ func (s *peerStatus) activate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		Log.Infof("peer %s became active", s.id)
+		plog.Infof("peer %s became active", s.id)
 		s.active = true
 		s.since = time.Now()
 	}
@@ -56,13 +55,13 @@ func (s *peerStatus) deactivate(failure failureType, reason string) {
 	defer s.mu.Unlock()
 	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.id, failure.source, reason)
 	if s.active {
-		Log.Errorf(msg)
-		Log.Infof("peer %s became inactive", s.id)
+		plog.Errorf(msg)
+		plog.Infof("peer %s became inactive (message send to peer failed)", s.id)
 		s.active = false
 		s.since = time.Time{}
 		return
 	}
-	Log.Debugf(msg)
+	plog.Debugf(msg)
 }
 
 func (s *peerStatus) isActive() bool {
